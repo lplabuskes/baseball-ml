@@ -28,8 +28,6 @@ def prep_dataset(normalizer: tf.keras.layers.Normalization=None):
 
     if normalizer is not None:
         normalizer.adapt(X_train)
-        X_train = normalizer(X_train)
-        X_valid = normalizer(X_valid)
 
     training_dataset = training_dataset.shuffle(SHUFFLE_BUFFER).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
     validation_dataset = validation_dataset.batch(BATCH_SIZE)
