@@ -1,6 +1,7 @@
 import os
 os.add_dll_directory(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin")
 import tensorflow as tf
+import keras_tuner as kt
 import numpy as np
 from sklearn.model_selection import train_test_split
 from datetime import datetime
@@ -38,9 +39,11 @@ def prep_dataset(normalizer: tf.keras.layers.Normalization=None):
 
     return training_dataset, validation_dataset, testing_dataset
 
-def generate_model(n_features: int, n_layers: int=4, n_neurons: int=100):
+def generate_model(hp: kt.HyperParameters):
+    n_neurons = hp.Int("n_neurons", min_value=16, max_value=128, step=16)
+    n_layers = hp.Int("n_layers", min_value=1, max_value=10)
     model = tf.keras.Sequential([
-        tf.keras.layers.InputLayer(input_shape=(n_features,))
+        tf.keras.layers.InputLayer(input_shape=(N_FEATURES,))
     ]+[
         tf.keras.layers.Dense(n_neurons, activation="selu", kernel_initializer="lecun_normal") for _ in range(n_layers)
     ]+[
@@ -65,7 +68,13 @@ if __name__ == "__main__":
 
     norm_layer = tf.keras.layers.Normalization(input_shape=(N_FEATURES,))
     training_dataset, validation_dataset, testing_dataset = prep_dataset(normalizer=norm_layer)
-    model = generate_model(n_features=N_FEATURES, n_layers=3, n_neurons=50)
+
+    tuner = kt.BayesianOptimization(generate_model, objective="val_loss", max_trials=20,
+                                    overwrite=True, directory="models/tuner", project_name="baseball_ml")
+    tuner.search(training_dataset, epochs=10, validation_data=validation_dataset)
+    
+    best_params = tuner.get_best_hyperparameters()[0]
+    model = generate_model(best_params)
 
     lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=5)
     early_stopping = tf.keras.callbacks.EarlyStopping(patience=10, restore_best_weights=True)
