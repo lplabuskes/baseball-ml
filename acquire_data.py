@@ -110,7 +110,7 @@ def generate_numpy_dataset(start_season, end_season):
     print("Parsing game features")
     for game_dict in tqdm(games_data["games"]):
         game = game_from_dict(game_dict)
-        result = np.array([1 if game.home_win else 0])
+        result = np.array([1 if game.home_team_won else 0])
         features = game_to_features(game, batting_data, pitching_data,
                                     batter_stats=[("BsR", -2.0),
                                                   ("wRC+", 80.0)],

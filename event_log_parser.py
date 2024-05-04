@@ -1,10 +1,13 @@
-from baseball_types import Game
-from typing import List, Dict, Iterable
+from baseball_types import Game, NullIO
+from typing import List, Dict, Tuple, Iterable
 
 from copy import deepcopy
 from pathlib import Path
+import datetime
+import sys
 from tqdm import tqdm
-from pybaseball import playerid_reverse_lookup
+import pandas as pd
+from pybaseball import playerid_reverse_lookup, schedule_and_record, team_ids
 
 
 def parse_event_file(path: str, cached_ids: Dict[str, int] = {}) -> List[Game]:
@@ -20,9 +23,22 @@ def parse_event_file(path: str, cached_ids: Dict[str, int] = {}) -> List[Game]:
 
             elif line.startswith("info,date"):
                 current_game.year = int(line[10:14])
+                current_game.month = int(line[15:17])
+                current_game.day = int(line[18:20])
+
+            elif line.startswith("info,number"):
+                current_game.game_number = int(line[-2])
 
             elif line.startswith("info,wp"):
                 winning_pitcher = line[8:].strip()
+
+            # Use the teams and date info later to determine team records
+            # Not doing it as part of this function to cut down on web queries
+            elif line.startswith("info,visteam"):
+                current_game.away_team = line[13:].strip()
+
+            elif line.startswith("info,hometeam"):
+                current_game.home_team = line[14:].strip()
 
             elif line.startswith("start"):
                 # Parse out relevant info
@@ -34,7 +50,7 @@ def parse_event_file(path: str, cached_ids: Dict[str, int] = {}) -> List[Game]:
 
                 # Check if this player is the winning pitcher
                 if retro_id == winning_pitcher:
-                    current_game.home_win = home
+                    current_game.home_team_won = home
 
                 # Determine if we need to query pybaseball for FanGraphs ID
                 if retro_id not in cached_ids:
@@ -60,7 +76,7 @@ def parse_event_file(path: str, cached_ids: Dict[str, int] = {}) -> List[Game]:
                 # We need this logic to figure out who the winning pitcher plays for
                 player_info = line.split(",")
                 if player_info[1] == winning_pitcher:
-                    current_game.home_win = player_info[3]=="1"
+                    current_game.home_team_won = player_info[3]=="1"
 
             elif line.startswith("data") and current_game is not None:
                 # This is our indicator for the end of the game
@@ -91,6 +107,65 @@ def parse_event_file(path: str, cached_ids: Dict[str, int] = {}) -> List[Game]:
     return games
 
 
+def datestring(game: Game) -> str:
+    date = datetime.datetime(game.year, game.month, game.day)
+    out = date.strftime("%A, %b %d").replace(" 0", " ")
+    if game.game_number != 0:
+        out += f" ({game.game_number})"
+    return out
+
+
+def parse_record_table(df: pd.DataFrame) -> Tuple[int, int]:
+    # df is a one row DataFrame wth columns: Date, W/L, W-L
+    try:
+        won_game = df["W/L"].item().startswith("W")
+    except Exception as e:
+        print(df)
+        raise e
+    wins, losses = [int(n) for n in df["W-L"].item().split("-")]
+    if won_game:
+        wins -= 1
+    else:
+        losses -= 1
+    return wins, losses
+
+
+def find_win_loss(games: List[Game], team_ids_cache: Dict[str, str]):
+    cached_schedule_tables = {}
+    team_id_lut = team_ids(season=games[0].year)
+    silencer = NullIO()
+    for game in tqdm(games, unit="game", ncols=80):
+        for team in [game.home_team, game.away_team]:
+            if team not in cached_schedule_tables:
+                if game.year <= 2021:  # pybaseball team ID has data through 2021
+                    br_team_id = team_id_lut[team_id_lut["teamIDretro"]==team]["teamIDBR"].item()
+                    team_ids_cache[team] = br_team_id
+                elif team in team_ids_cache:  # hope they didn't change between 2021 and 2023 :shrug:
+                    br_team_id = team_ids_cache[team]
+                else:
+                    br_team_id = team
+
+                sys.stdout = silencer
+                tbl: pd.DataFrame = schedule_and_record(game.year, br_team_id)
+                sys.stdout = sys.__stdout__
+
+                tbl = tbl[["Date", "W/L", "W-L"]]
+                cached_schedule_tables[team] = tbl
+
+        date = datestring(game)
+        home_table = cached_schedule_tables[game.home_team]
+        home_table = home_table[home_table["Date"]==date]
+        w, l = parse_record_table(home_table)
+        game.home_wins = w
+        game.home_losses = l
+
+        away_table = cached_schedule_tables[game.away_team]
+        away_table = away_table[away_table["Date"]==date]
+        w, l = parse_record_table(away_table)
+        game.away_wins = w
+        game.away_losses = l
+
+
 def count_files(iter: Iterable) -> int:
     # Vanity helper function for prettier progress bars
     n = 0
@@ -103,11 +178,15 @@ def parse_events_directory(path: str, start_season: int, end_season: int) -> Lis
     dir = Path(path)
     all_games = []
     player_ids = {}
+    team_id_cache = {}
     for year in range(start_season, end_season+1):
+        year_games = []
         n_files = count_files(dir.glob(f"{year}*"))
         for file in tqdm(dir.glob(f"{year}*"), desc=str(year), total=n_files, unit="file", ncols=80):
             games = parse_event_file(file, cached_ids=player_ids)
-            all_games.extend(games)
+            year_games.extend(games)
+        find_win_loss(year_games, team_id_cache)
+        all_games.extend(year_games)
     return all_games
 
 
