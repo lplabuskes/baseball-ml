@@ -28,6 +28,15 @@ class Game:
     home_team_won: bool = True
 
 
+@dataclass
+class OddsOutcome:
+    home_line: int = 0
+    away_line: int = 0
+    home_implied_odds: float = 0.0
+    away_implied_odds: float = 0.0
+    home_team_won: bool = True
+
+
 class NullIO(StringIO):
     def write(self, s: str) -> int:
         pass
