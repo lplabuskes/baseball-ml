@@ -2,6 +2,7 @@ from typing import List, Tuple
 from baseball_types import OddsOutcome
 import time
 import os
+from tqdm import tqdm
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -14,6 +15,8 @@ import re
 
 ODDS_BOX_CLASS = "next-m:min-w-[80%] next-m:min-h-[26px] next-m:max-h-[26px] flex cursor-pointer items-center justify-center font-bold hover:border hover:border-orange-main min-w-[50px] min-h-[50px]"
 DATA_TABLE_CLASS = "flex flex-col px-3 text-sm max-mm:px-0"
+DIR = "C:\\Users\\lplab\\Documents\\Retrosheet\\odds"
+BASE_URL = "https://www.oddsportal.com/baseball/usa/"
 
 
 # Website I'm using has a delay that prevents `requests` from working
@@ -76,8 +79,6 @@ def parse_odds_page(html: str) -> List[OddsOutcome]:
 
 
 def walk_odds_site():
-    DIR = "C:\\Users\\lplab\\Documents\\Retrosheet\\odds"
-    BASE_URL = "https://www.oddsportal.com/baseball/usa/"
     if not os.path.exists(DIR):
         os.makedirs(DIR)
     html = grab_html(BASE_URL + "mlb/results/")
@@ -98,4 +99,35 @@ def walk_odds_site():
 
 
 if __name__ == "__main__":
-    walk_odds_site()
+    # walk_odds_site()
+    yearly_book_success = {}
+
+    for filename in tqdm(os.listdir(DIR)):
+        path = os.path.join(DIR, filename)
+        if not os.path.isfile(path):
+            continue
+
+        year = int(filename.split("_")[1])
+        with open(path, "r", encoding="utf-16") as file:
+            html = file.read()
+        results = parse_odds_page(html)
+
+        n_events = 0
+        sum_square_error = 0
+        for result in results:
+            n_events += 1
+            sum_square_error += (1-result.home_implied_odds)**2 if result.home_team_won else (1-result.away_implied_odds)**2
+
+        if year not in yearly_book_success:
+            yearly_book_success[year] = [n_events, sum_square_error]
+        else:
+            yearly_book_success[year][0] += n_events
+            yearly_book_success[year][1] += sum_square_error
+
+    total_sse = 0
+    total_n = 0
+    for year, (n, sse) in yearly_book_success.items():
+        total_sse += sse
+        total_n += n
+        print(f"{year}: MSE={sse/n:5}")
+    print(f"Overall: MSE={total_sse/total_n:5}")
